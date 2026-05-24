@@ -57,9 +57,29 @@ public:
     }
 
     void OnGyroData(const std::vector<ins_camera::GyroData>& data) override {
+        // Use the SDK's per-sample timestamp (milliseconds since some epoch
+        // that the SDK doesn't document) instead of ros::now(). The SDK
+        // delivers IMU samples in bursts over USB; if we stamp with ros::now
+        // every sample in a burst gets nearly the same time and the resulting
+        // log is useless for Allan-variance / frequency analysis.
+        //
+        // Anchor the SDK clock to wall-clock at the first sample so rosbag
+        // timestamps look like real time; subsequent samples are spaced by
+        // their SDK delta (uniform 1-2 ms at the X5's ~500 Hz live stream).
+        static int64_t t0_sdk_ms = -1;
+        static rclcpp::Time t0_ros = rclcpp::Time(0, 0, RCL_ROS_TIME);
         for (const auto& gyro : data) {
+            if (t0_sdk_ms < 0) {
+                t0_sdk_ms = gyro.timestamp;
+                t0_ros = node_->get_clock()->now();
+            }
+            const int64_t dt_ns =
+                static_cast<int64_t>(gyro.timestamp - t0_sdk_ms) * 1'000'000;
+            const rclcpp::Time stamp =
+                t0_ros + rclcpp::Duration(std::chrono::nanoseconds(dt_ns));
+
             auto msg = std::make_unique<sensor_msgs::msg::Imu>();
-            msg->header.stamp = node_->get_clock()->now();
+            msg->header.stamp = stamp;
             msg->header.frame_id = "imu_frame";
             msg->angular_velocity.x = gyro.gx;
             msg->angular_velocity.y = gyro.gy;
