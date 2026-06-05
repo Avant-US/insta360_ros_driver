@@ -4,9 +4,17 @@
     <arg name="imu_filter" default="true"/>
     <arg name="equirectangular_config" default="$(find-pkg-share insta360_ros_driver)/config/equirectangular.yaml"/>
     <arg name="imu_config" default="$(find-pkg-share insta360_ros_driver)/config/imu_filter.yaml"/>
+    <!-- Requested live-stream resolution as "WIDTHxHEIGHT". Supported values:
+         3840x1920, 2880x2880, 2560x1280, 2304x1152, 1920x960, 1440x720.
+         Actual delivered resolution is negotiated per camera model (e.g. X5 is capped). -->
+    <arg name="video_resolution" default="1920x960"/>
+    <arg name="video_bitrate" default="524288"/>
 
     <!-- Publishes Compressed Images -->
-    <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log"/>
+    <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log">
+        <param name="video_resolution" value="$(var video_resolution)"/>
+        <param name="video_bitrate" value="$(var video_bitrate)"/>
+    </node>
 
     <!-- Decodes Compressed Images -->
     <node pkg="insta360_ros_driver" exec="decoder" name="image_decoder" output="log">

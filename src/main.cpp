@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <map>
+#include <algorithm>
 
 #include <camera/camera.h>
 #include <camera/photography_settings.h>
@@ -12,6 +14,51 @@
 #include "rclcpp/qos.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "sensor_msgs/msg/imu.hpp"
+
+namespace {
+
+// Human-readable "WIDTHxHEIGHT" -> SDK resolution enum. Note that the actual
+// delivered resolution is negotiated per camera model over USB and may differ
+// from the requested value (e.g. the X5 USB live stream is effectively capped
+// at ~2656x1328 regardless of what is requested here).
+const std::map<std::string, ins_camera::VideoResolution> kResolutionMap = {
+    {"3840x1920", ins_camera::VideoResolution::RES_3840_1920P30},
+    {"2880x2880", ins_camera::VideoResolution::RES_2880_2880P30},
+    {"2560x1280", ins_camera::VideoResolution::RES_2560_1280P30},
+    {"2304x1152", ins_camera::VideoResolution::RES_1152_1152P30}, // 2304x1152 @30
+    {"1920x960",  ins_camera::VideoResolution::RES_1920_960P30},
+    {"1440x720",  ins_camera::VideoResolution::RES_1440_720P30},
+};
+
+// Fallback used when the requested resolution is rejected by the camera.
+constexpr ins_camera::VideoResolution kFallbackResolution =
+    ins_camera::VideoResolution::RES_1920_960P30;
+constexpr const char* kFallbackResolutionStr = "1920x960";
+
+std::string CameraTypeToString(ins_camera::CameraType type) {
+    switch (type) {
+        case ins_camera::CameraType::Insta360OneX:   return "ONE X";
+        case ins_camera::CameraType::Insta360OneR:   return "ONE R";
+        case ins_camera::CameraType::Insta360OneRS:  return "ONE RS";
+        case ins_camera::CameraType::Insta360OneX2:  return "X2";
+        case ins_camera::CameraType::Insta360X3:     return "X3";
+        case ins_camera::CameraType::Insta360X4:     return "X4";
+        case ins_camera::CameraType::Insta360X5:     return "X5";
+        case ins_camera::CameraType::Insta360X4Air:  return "X4 Air";
+        default:                                     return "Unknown";
+    }
+}
+
+std::string SupportedResolutionList() {
+    std::string out;
+    for (const auto& kv : kResolutionMap) {
+        if (!out.empty()) out += ", ";
+        out += kv.first;
+    }
+    return out;
+}
+
+} // namespace
 
 class TestStreamDelegate : public ins_camera::StreamDelegate {
 private:
@@ -129,12 +176,17 @@ public:
             return -1;
         }
 
-        cam = std::make_shared<ins_camera::Camera>(list[0].info);
+        const auto& device = list[0];
+        cam = std::make_shared<ins_camera::Camera>(device.info);
         if (!cam->Open()) {
             RCLCPP_ERROR(node_->get_logger(), "Failed to open camera.");
             return -1;
         }
-        RCLCPP_INFO(node_->get_logger(), "Camera opened successfully.");
+        RCLCPP_INFO(node_->get_logger(),
+            "Camera opened successfully. Type: %s, Serial: %s, Firmware: %s",
+            CameraTypeToString(device.camera_type).c_str(),
+            device.serial_number.c_str(),
+            device.fw_version.c_str());
         discovery.FreeDeviceDescriptors(list);
 
         std::shared_ptr<ins_camera::StreamDelegate> delegate = std::make_shared<TestStreamDelegate>(node_);
@@ -145,25 +197,62 @@ public:
         uint64_t utc_time = static_cast<uint64_t>(start);
         uint32_t offset_time = 0; //no offset from UTC
 
-        cam->SyncLocalTimeToCamera(utc_time,offset_time);       
+        cam->SyncLocalTimeToCamera(utc_time,offset_time);
+
+        // Resolution is configurable at launch as "WIDTHxHEIGHT" (see kResolutionMap).
+        // The actual delivered resolution is negotiated by the camera over USB and
+        // may differ from the request (e.g. the X5 is effectively capped).
+        const std::string requested_res =
+            node_->declare_parameter<std::string>("video_resolution", "1920x960");
+        const int video_bitrate =
+            node_->declare_parameter<int>("video_bitrate", 1024 * 1024 / 2);
+
+        ins_camera::VideoResolution resolution = kFallbackResolution;
+        std::string resolution_str = kFallbackResolutionStr;
+        auto it = kResolutionMap.find(requested_res);
+        if (it != kResolutionMap.end()) {
+            resolution = it->second;
+            resolution_str = requested_res;
+        } else {
+            RCLCPP_WARN(node_->get_logger(),
+                "Unknown video_resolution '%s'; using default '%s'. Supported: %s",
+                requested_res.c_str(), kFallbackResolutionStr,
+                SupportedResolutionList().c_str());
+        }
+
         ins_camera::LiveStreamParam param;
-        param.video_resolution = ins_camera::VideoResolution::RES_1920_960P30; //Change this line to edit the resolution
-        //Possible resolutions (results may vary per model) are:
-        //RES_3840_1920P30
-        //RES_2560_1280P30
-        //RES_1152_1152P30 (this will give 2304 x 1152 at 30 FPS)
-        //RES_1920_960P30  
+        param.video_resolution = resolution;
         param.lrv_video_resulution = ins_camera::VideoResolution::RES_1440_720P30;
-        param.video_bitrate = 1024 * 1024 / 2;
+        param.video_bitrate = static_cast<uint32_t>(video_bitrate);
         param.enable_audio = false;
         param.using_lrv = false;
 
+        RCLCPP_INFO(node_->get_logger(),
+            "Requesting live stream at %s (bitrate %d bps).",
+            resolution_str.c_str(), video_bitrate);
+
         if (!cam->StartLiveStreaming(param)) {
-            RCLCPP_ERROR(node_->get_logger(), "Failed to start live streaming.");
+            // The requested resolution may be unsupported on this model. Retry once
+            // with the known-good fallback before giving up.
+            if (resolution != kFallbackResolution) {
+                RCLCPP_WARN(node_->get_logger(),
+                    "Failed to start live streaming at %s; retrying at fallback %s.",
+                    resolution_str.c_str(), kFallbackResolutionStr);
+                param.video_resolution = kFallbackResolution;
+                if (cam->StartLiveStreaming(param)) {
+                    RCLCPP_INFO(node_->get_logger(),
+                        "Live streaming started at fallback %s.", kFallbackResolutionStr);
+                    return 0;
+                }
+            }
+            RCLCPP_ERROR(node_->get_logger(),
+                "Failed to start live streaming. The requested resolution may be "
+                "unsupported on this camera model over USB.");
             return -1;
         }
-        
-        RCLCPP_INFO(node_->get_logger(), "Live streaming started.");
+
+        RCLCPP_INFO(node_->get_logger(), "Live streaming started at %s.",
+            resolution_str.c_str());
         return 0;
     }
 };

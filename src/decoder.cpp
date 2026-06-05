@@ -197,9 +197,15 @@ private:
                 if (!sws_ctx_) {
                     av_frame_unref(hw_frame_);
                     if (frame_to_display == sw_frame_) av_frame_unref(sw_frame_);
-                    return; 
+                    return;
                 }
                 bgr_frame_.create(frame_to_display->height, frame_to_display->width, CV_8UC3);
+
+                // Log the actual delivered (negotiated) resolution. This is the
+                // ground truth and may differ from the requested resolution, e.g.
+                // the X5 streams a fixed ~2656x1328 over USB regardless of request.
+                RCLCPP_INFO(this->get_logger(), "Decoding stream at actual resolution %dx%d.",
+                    frame_to_display->width, frame_to_display->height);
             }
 
             if (sws_ctx_ && !bgr_frame_.empty()) {
