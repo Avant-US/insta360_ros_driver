@@ -63,18 +63,23 @@ std::string SupportedResolutionList() {
 class TestStreamDelegate : public ins_camera::StreamDelegate {
 private:
     std::shared_ptr<rclcpp::Node> node_;
+    std::string frame_prefix_;
     rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
 
 public:
-    TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node) : node_(node) {
-        // Publisher for the compressed H.264 video stream
+    TestStreamDelegate(const std::shared_ptr<rclcpp::Node>& node,
+                       const std::string& frame_prefix = "")
+        : node_(node), frame_prefix_(frame_prefix) {
+        // Relative topic names (no leading '/') so the node's namespace prefixes
+        // them: launching this node under /cam3 publishes /cam3/dual_fisheye/...
+        // and /cam3/imu/data_raw, letting two cameras coexist on one ROS graph.
         compressed_pub_ = node_->create_publisher<sensor_msgs::msg::CompressedImage>(
-            "/dual_fisheye/image/compressed", 
+            "dual_fisheye/image/compressed",
             rclcpp::QoS(10)
         );
 
-        // Publisher for IMU data (remains the same)
+        // Publisher for IMU data
         imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>("imu/data_raw", rclcpp::SensorDataQoS());
         RCLCPP_INFO(node_->get_logger(), "Publisher for compressed images and IMU created.");
     }
@@ -90,7 +95,7 @@ public:
 
             // Set the header
             msg->header.stamp = node_->get_clock()->now();
-            msg->header.frame_id = "camera_frame";
+            msg->header.frame_id = frame_prefix_ + "camera_frame";
 
             // Set the format to H.264
             // The subscriber will need to know this to select the correct decoder.
@@ -127,7 +132,7 @@ public:
 
             auto msg = std::make_unique<sensor_msgs::msg::Imu>();
             msg->header.stamp = stamp;
-            msg->header.frame_id = "imu_frame";
+            msg->header.frame_id = frame_prefix_ + "imu_frame";
             msg->angular_velocity.x = gyro.gx;
             msg->angular_velocity.y = gyro.gy;
             msg->angular_velocity.z = gyro.gz;
@@ -169,6 +174,15 @@ public:
     }
 
     int run_camera() {
+        // `serial` selects a specific camera by its SDK serial number when more
+        // than one X5 is plugged in (empty = first discovered). `frame_prefix`
+        // is prepended to the published frame_ids so two cameras don't collide in
+        // a shared TF tree (e.g. "cam3_" -> cam3_camera_frame / cam3_imu_frame).
+        const std::string serial =
+            node_->declare_parameter<std::string>("serial", "");
+        const std::string frame_prefix =
+            node_->declare_parameter<std::string>("frame_prefix", "");
+
         ins_camera::DeviceDiscovery discovery;
         auto list = discovery.GetAvailableDevices();
         if (list.empty()) {
@@ -176,10 +190,34 @@ public:
             return -1;
         }
 
-        const auto& device = list[0];
+        // Pick the requested serial, or the first device when none is requested.
+        int chosen = -1;
+        if (serial.empty()) {
+            chosen = 0;
+        } else {
+            for (size_t i = 0; i < list.size(); ++i) {
+                if (list[i].serial_number == serial) { chosen = static_cast<int>(i); break; }
+            }
+            if (chosen < 0) {
+                std::string available;
+                for (const auto& d : list) {
+                    if (!available.empty()) available += ", ";
+                    available += d.serial_number;
+                }
+                RCLCPP_ERROR(node_->get_logger(),
+                    "Requested serial '%s' not among connected cameras: [%s].",
+                    serial.c_str(), available.c_str());
+                discovery.FreeDeviceDescriptors(list);
+                return -1;
+            }
+        }
+
+        const auto& device = list[chosen];
         cam = std::make_shared<ins_camera::Camera>(device.info);
         if (!cam->Open()) {
-            RCLCPP_ERROR(node_->get_logger(), "Failed to open camera.");
+            RCLCPP_ERROR(node_->get_logger(), "Failed to open camera (serial %s).",
+                device.serial_number.c_str());
+            discovery.FreeDeviceDescriptors(list);
             return -1;
         }
         RCLCPP_INFO(node_->get_logger(),
@@ -189,7 +227,8 @@ public:
             device.fw_version.c_str());
         discovery.FreeDeviceDescriptors(list);
 
-        std::shared_ptr<ins_camera::StreamDelegate> delegate = std::make_shared<TestStreamDelegate>(node_);
+        std::shared_ptr<ins_camera::StreamDelegate> delegate =
+            std::make_shared<TestStreamDelegate>(node_, frame_prefix);
         cam->SetStreamDelegate(delegate);
 
         auto start = time(NULL);

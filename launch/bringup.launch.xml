@@ -10,29 +10,46 @@
     <arg name="video_resolution" default="1920x960"/>
     <arg name="video_bitrate" default="524288"/>
 
-    <!-- Publishes Compressed Images -->
-    <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log">
-        <param name="video_resolution" value="$(var video_resolution)"/>
-        <param name="video_bitrate" value="$(var video_bitrate)"/>
-    </node>
+    <!-- Multi-camera support. To run two X5s, launch this file twice with distinct
+         namespaces + serials, e.g.:
+           ros2 launch insta360_ros_driver bringup.launch.xml namespace:=cam3 serial:=IAHYA25116W5XY frame_prefix:=cam3_
+           ros2 launch insta360_ros_driver bringup.launch.xml namespace:=cam4 serial:=IAHYA2511BS4S3 frame_prefix:=cam4_
+         Topics then publish under /cam3/dual_fisheye/image, /cam4/dual_fisheye/image, etc.
+         Leave all three empty (default) for the single-camera case (topics at root). -->
+    <arg name="namespace" default=""/>
+    <arg name="serial" default=""/>
+    <arg name="frame_prefix" default=""/>
 
-    <!-- Decodes Compressed Images -->
-    <node pkg="insta360_ros_driver" exec="decoder" name="image_decoder" output="log">
-        <param name="compressed_topic" value="/dual_fisheye/image/compressed"/>
-        <param name="uncompressed_topic" value="/dual_fisheye/image"/>
-        <!-- We can skip decoding every <skip_frame>. So skip_frame = 1 will only publish half the frames, etc. -->
-        <param name="skip_frame" value="0"/>
-        <!-- If you want to minimize the CPU load the most, you can decode only the i-frames. But the expected FPS is about 1-2 FPS -->
-        <param name="i_frame_only" value="false"/> 
-    </node>
+    <group>
+        <push-ros-namespace namespace="$(var namespace)"/>
 
-    <!-- Creates Equirectangular Images -->
-    <node if="$(var equirectangular)" pkg="insta360_ros_driver" exec="equirectangular_cpp" name="equirectangular_node" output="screen">
-        <param from="$(var equirectangular_config)" />
-    </node>
+        <!-- Publishes Compressed Images + IMU for the selected camera -->
+        <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log">
+            <param name="video_resolution" value="$(var video_resolution)"/>
+            <param name="video_bitrate" value="$(var video_bitrate)"/>
+            <param name="serial" value="$(var serial)"/>
+            <param name="frame_prefix" value="$(var frame_prefix)"/>
+        </node>
 
-    <!-- Applies a Madgwick Filter to the 6-DOF IMU to get Orientation -->
-    <node if="$(var imu_filter)" pkg="imu_filter_madgwick" exec="imu_filter_madgwick_node" name="imu_filter" output="log">
-        <param from="$(var imu_config)"/>
-    </node>
+        <!-- Decodes Compressed Images. Relative topics resolve under the namespace. -->
+        <node pkg="insta360_ros_driver" exec="decoder" name="image_decoder" output="log">
+            <param name="compressed_topic" value="dual_fisheye/image/compressed"/>
+            <param name="uncompressed_topic" value="dual_fisheye/image"/>
+            <param name="frame_prefix" value="$(var frame_prefix)"/>
+            <!-- We can skip decoding every <skip_frame>. So skip_frame = 1 will only publish half the frames, etc. -->
+            <param name="skip_frame" value="0"/>
+            <!-- If you want to minimize the CPU load the most, you can decode only the i-frames. But the expected FPS is about 1-2 FPS -->
+            <param name="i_frame_only" value="false"/>
+        </node>
+
+        <!-- Creates Equirectangular Images -->
+        <node if="$(var equirectangular)" pkg="insta360_ros_driver" exec="equirectangular_cpp" name="equirectangular_node" output="screen">
+            <param from="$(var equirectangular_config)" />
+        </node>
+
+        <!-- Applies a Madgwick Filter to the 6-DOF IMU to get Orientation -->
+        <node if="$(var imu_filter)" pkg="imu_filter_madgwick" exec="imu_filter_madgwick_node" name="imu_filter" output="log">
+            <param from="$(var imu_config)"/>
+        </node>
+    </group>
 </launch>
