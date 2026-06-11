@@ -90,8 +90,15 @@ public:
         : node_(node), frame_prefix_(frame_prefix) {
         compressed_pub_ = node_->create_publisher<sensor_msgs::msg::CompressedImage>(
             "dual_fisheye/image/compressed", rclcpp::QoS(10));
+        // The SDK delivers gyro in bursts of ~50 samples (the X5 live stream's
+        // ~500 Hz batched into ~10 callbacks/sec). The default SensorDataQoS
+        // depth of 5 can only hold ~5 of each burst before the subscriber drains
+        // it, dropping ~90% in transit (subscribers then see only ~50 Hz). Keep
+        // best-effort semantics but deepen the queue to hold several full bursts
+        // so the full ~500 Hz survives. Consumers must subscribe with a
+        // similarly deep queue to receive it all.
         imu_pub_ = node_->create_publisher<sensor_msgs::msg::Imu>(
-            "imu/data_raw", rclcpp::SensorDataQoS());
+            "imu/data_raw", rclcpp::SensorDataQoS().keep_last(200));
         RCLCPP_INFO(node_->get_logger(),
             "Publisher for compressed images and IMU created.");
     }
