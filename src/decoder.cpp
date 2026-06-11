@@ -58,6 +58,7 @@ private:
     int skip_frame_ = 0;
     int frame_counter_ = 0;
     bool i_frame_only_ = false;
+    std::string frame_prefix_;
 
     void InitFFmpegDecoder() {
         hw_type_ = AV_HWDEVICE_TYPE_CUDA;
@@ -156,7 +157,7 @@ private:
                 auto img_msg = std::make_unique<sensor_msgs::msg::Image>();
                 std_msgs::msg::Header header;
                 header.stamp = this->get_clock()->now();
-                header.frame_id = "camera_frame";
+                header.frame_id = frame_prefix_ + "camera_frame";
                 cv_bridge::CvImage cv_image(header, sensor_msgs::image_encodings::BGR8, frame_to_publish);
                 cv_image.toImageMsg(*img_msg);
                 publisher_->publish(std::move(img_msg));
@@ -197,9 +198,15 @@ private:
                 if (!sws_ctx_) {
                     av_frame_unref(hw_frame_);
                     if (frame_to_display == sw_frame_) av_frame_unref(sw_frame_);
-                    return; 
+                    return;
                 }
                 bgr_frame_.create(frame_to_display->height, frame_to_display->width, CV_8UC3);
+
+                // Log the actual delivered (negotiated) resolution. This is the
+                // ground truth and may differ from the requested resolution, e.g.
+                // the X5 streams a fixed ~2656x1328 over USB regardless of request.
+                RCLCPP_INFO(this->get_logger(), "Decoding stream at actual resolution %dx%d.",
+                    frame_to_display->width, frame_to_display->height);
             }
 
             if (sws_ctx_ && !bgr_frame_.empty()) {
@@ -311,15 +318,19 @@ private:
 
 public:
     H264DecoderNode() : Node("h264_decoder_node") {
-        this->declare_parameter("compressed_topic", "/dual_fisheye/image/compressed");
-        this->declare_parameter("uncompressed_topic", "/dual_fisheye/image");
+        // Relative defaults so a node namespace (e.g. /cam3) prefixes them and the
+        // decoder pairs with the driver running in the same namespace.
+        this->declare_parameter("compressed_topic", "dual_fisheye/image/compressed");
+        this->declare_parameter("uncompressed_topic", "dual_fisheye/image");
         this->declare_parameter("skip_frame", 0);
         this->declare_parameter("i_frame_only", false);
+        this->declare_parameter("frame_prefix", "");
 
         std::string subscribe_topic = this->get_parameter("compressed_topic").as_string();
         std::string publish_topic = this->get_parameter("uncompressed_topic").as_string();
         skip_frame_ = this->get_parameter("skip_frame").as_int();
         i_frame_only_ = this->get_parameter("i_frame_only").as_bool();
+        frame_prefix_ = this->get_parameter("frame_prefix").as_string();
 
         subscription_ = this->create_subscription<sensor_msgs::msg::CompressedImage>(
             subscribe_topic, 10,
