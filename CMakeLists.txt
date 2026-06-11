@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(camera_info_manager REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(image_transport REQUIRED)
@@ -69,6 +70,20 @@ ament_target_dependencies(decoder
 target_link_libraries(decoder CameraSDK  ${OpenCV_LIBRARIES} ${AVCODEC_LIBRARIES} ${AVFORMAT_LIBRARIES} ${AVUTIL_LIBRARIES} ${SWSCALE_LIBRARIES})
 
 install(TARGETS decoder
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Single-process multi-camera node: opens every requested camera in one process
+# (one SDK init -> one service-port allocation per camera) so two X5s can stream
+# at once without the cross-process "bind: Address already in use" abort.
+add_executable(multicam src/multicam.cpp)
+ament_target_dependencies(multicam
+  rclcpp
+  sensor_msgs
+)
+target_link_libraries(multicam CameraSDK)
+
+install(TARGETS multicam
   DESTINATION lib/${PROJECT_NAME}
 )
 
