@@ -41,6 +41,18 @@ public:
             node_->declare_parameter<std::string>("video_resolution", "1920x960");
         const int video_bitrate =
             node_->declare_parameter<int>("video_bitrate", 1024 * 1024 / 2);
+        // Substitute the camera's low-res (~1024x512) preview stream for the
+        // main one - a camera-side latency experiment (see insta360_stream.hpp).
+        const bool using_lrv =
+            node_->declare_parameter<bool>("using_lrv", false);
+        // SDK 2.1.1 X4/X5 live-view flow (SetVideoSubMode + SetVideoCaptureParams
+        // before streaming) - may make X5 preview resolution selectable.
+        const bool live_view_mode =
+            node_->declare_parameter<bool>("live_view_mode", false);
+        // Sensor selection: "front" | "rear" | "all" | "" (leave as-is).
+        // Single-sensor halves the encoded pixels (see insta360_stream.hpp).
+        const std::string active_sensor =
+            node_->declare_parameter<std::string>("active_sensor", "");
 
         ins_camera::DeviceDiscovery discovery;
         auto list = discovery.GetAvailableDevices();
@@ -86,6 +98,8 @@ public:
             device.fw_version.c_str());
         discovery.FreeDeviceDescriptors(list);
 
+        insta360::ApplyActiveSensor(cam, active_sensor, node_->get_logger());
+
         std::shared_ptr<ins_camera::StreamDelegate> delegate =
             std::make_shared<insta360::TestStreamDelegate>(node_, frame_prefix);
         cam->SetStreamDelegate(delegate);
@@ -96,10 +110,12 @@ public:
         std::string resolved_str;
         if (!insta360::StartLiveStreamingWithFallback(
                 cam, requested_res, video_bitrate, node_->get_logger(),
-                resolved_str)) {
+                resolved_str, using_lrv, live_view_mode)) {
             return -1;
         }
-        RCLCPP_INFO(node_->get_logger(), "Live streaming started at %s.",
+        RCLCPP_INFO(node_->get_logger(),
+            "Live streaming started (requested %s; actual frame size is set by the "
+            "camera - the X5 is capped, see the decoder's 'actual resolution' log).",
             resolved_str.c_str());
         return 0;
     }
