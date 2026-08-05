@@ -167,7 +167,9 @@ int main(int argc, char* argv[]) {
             cam->Close();
             continue;
         }
-        RCLCPP_INFO(logger, "[%s] Live streaming started at %s.",
+        RCLCPP_INFO(logger,
+            "[%s] Live streaming started (requested %s; actual frame size is set by "
+            "the camera - the X5 is capped, see the decoder's 'actual resolution' log).",
             ns.c_str(), resolved_str.c_str());
 
         exec.add_node(cam_node);

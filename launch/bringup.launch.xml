@@ -9,6 +9,30 @@
          Actual delivered resolution is negotiated per camera model (e.g. X5 is capped). -->
     <arg name="video_resolution" default="1920x960"/>
     <arg name="video_bitrate" default="524288"/>
+    <!-- H.264 decode backend: auto | cuvid | software | openh264.
+         Output-buffer latency floors measured on the X5 stream (see
+         docs/camera_latency_check.md in the parent repo):
+         openh264 (1 frame) < software (2 frames) < cuvid (3 frames). -->
+    <arg name="decoder" default="auto"/>
+    <!-- Substitute the camera's low-res (~1024x512) preview stream for the
+         main 2656x1328 one. Latency experiment: smaller encode may shrink the
+         camera-side encode buffer. (Verified no-op on X5 fw 1.1.22.) -->
+    <arg name="using_lrv" default="false"/>
+    <!-- SDK 2.1.1 X4/X5 live-view flow: SetVideoSubMode(VIDEO_LIVEVIEW) +
+         SetVideoCaptureParams(FUNCTION_MODE_LIVE_STREAM) before streaming.
+         The SDK example claims this makes the X5 preview resolution follow
+         video_resolution instead of being fixed at 2656x1328. -->
+    <arg name="live_view_mode" default="false"/>
+    <!-- Sensor selection: front | rear | all | "" (leave camera as-is).
+         DO NOT USE ON X5: verified (fw 1.1.22) to instantly drop the USB
+         session and reset the camera out of Android USB mode (recovery =
+         re-select Android mode + replug). Kept for other models only. -->
+    <arg name="active_sensor" default=""/>
+    <!-- Publish only one lens of the dual-fisheye frame: full | front | back.
+         front = right half. Halves the raw-image payload; use full for VIO /
+         anything needing both lenses. The latency probe then needs its lens
+         option set to "full" (the frame is already single-lens). -->
+    <arg name="publish_lens" default="full"/>
 
     <!-- Multi-camera support. To run two X5s, launch this file twice with distinct
          namespaces + serials, e.g.:
@@ -27,6 +51,9 @@
         <node pkg="insta360_ros_driver" exec="insta360_ros_driver" name="insta360_ros_driver" output="log">
             <param name="video_resolution" value="$(var video_resolution)"/>
             <param name="video_bitrate" value="$(var video_bitrate)"/>
+            <param name="using_lrv" value="$(var using_lrv)"/>
+            <param name="live_view_mode" value="$(var live_view_mode)"/>
+            <param name="active_sensor" value="$(var active_sensor)"/>
             <param name="serial" value="$(var serial)"/>
             <param name="frame_prefix" value="$(var frame_prefix)"/>
         </node>
@@ -36,6 +63,8 @@
             <param name="compressed_topic" value="dual_fisheye/image/compressed"/>
             <param name="uncompressed_topic" value="dual_fisheye/image"/>
             <param name="frame_prefix" value="$(var frame_prefix)"/>
+            <param name="decoder" value="$(var decoder)"/>
+            <param name="publish_lens" value="$(var publish_lens)"/>
             <!-- We can skip decoding every <skip_frame>. So skip_frame = 1 will only publish half the frames, etc. -->
             <param name="skip_frame" value="0"/>
             <!-- If you want to minimize the CPU load the most, you can decode only the i-frames. But the expected FPS is about 1-2 FPS -->

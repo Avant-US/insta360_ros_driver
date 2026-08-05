@@ -276,10 +276,13 @@ void EquirectangularNode::imageCallback(const sensor_msgs::msg::Image::SharedPtr
         cv::Mat front_img_full = dual_fisheye_img(cv::Rect(midpoint, 0, midpoint, img_height));
         cv::Mat back_img_full = dual_fisheye_img(cv::Rect(0, 0, midpoint, img_height));
         
-        cv::rotate(front_img_full, front_img_full, cv::ROTATE_90_COUNTERCLOCKWISE);
-        cv::rotate(back_img_full, back_img_full, cv::ROTATE_90_CLOCKWISE);
-        
-        
+        // No rotation: the halves are used in the orientation the driver
+        // published them, which is also the orientation the .insv per-lens
+        // streams carry and every camera calibration is expressed in.
+        // Removed 2026-08-05 - this node's 90 degree rotate was the origin of a
+        // second, incompatible lens convention (see core/camera/split.py).
+
+
         // Crop images based on crop_size parameter
         cv::Mat front_img, back_img;
         int current_crop_size = crop_size_;
