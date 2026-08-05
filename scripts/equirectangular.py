@@ -347,9 +347,13 @@ class EquirectangularNode(Node):
             front_img_full = dual_fisheye_img[:, midpoint:]
             back_img_full = dual_fisheye_img[:, :midpoint]
 
-            front_img_full = cv2.rotate(front_img_full, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            back_img_full = cv2.rotate(back_img_full, cv2.ROTATE_90_CLOCKWISE)
-            
+            # No rotation: the halves are used in the orientation the driver
+            # published them, which is also the orientation the .insv per-lens
+            # streams carry and every camera calibration is expressed in.
+            # Removed 2026-08-05 - this node's 90 degree rotate was the origin
+            # of a second, incompatible lens convention (see
+            # core/camera/split.py).
+
             # Store original uncropped images (always update in calibration mode)
             if self.calibration_mode or self.original_front_img is None or self.original_front_img.shape != front_img_full.shape:
                 self.original_front_img = front_img_full.copy()
